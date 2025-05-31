@@ -1,0 +1,239 @@
+---
+title: "Social Network of Pen Brands and Customers"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+This R Markdown file creates a bipartite social network using brand and customer relationships based on a dataset from the pen industry. The goal is to visualize the connections between brands and their customers.
+
+## Load Required Libraries
+```{r libraries}
+# Load necessary libraries
+# You can install them with install.packages("tidyverse") and install.packages("igraph")
+# install.packages(c("tidyverse", "igraph"))  # Uncomment if not already installed
+library(tidyverse) # For data manipulation and cleaning
+library(igraph) # For building and visualizing network graphs
+```
+
+## Load and Inspect the Data
+```{r load-data}
+# Load your data. Make sure the file path is correct.
+# Data is assumed to be semicolon-separated
+df <- read_csv("MOT133A_Final_database_V2.csv", col_types = cols(.default = "c"), locale = locale(encoding = "UTF-8"))
+
+# Take a quick look at the structure of the data
+glimpse(df)
+```
+
+## Data Cleaning
+```{r data-cleaning}
+# Clean the data: remove rows with missing or empty Brand or Customer, and trim whitespace
+df <- df %>%
+  filter(!is.na(Brand), Brand != "", !is.na(Customer), Customer != "") %>%
+  mutate(
+    Brand = str_trim(Brand),
+    Customer = str_trim(Customer)
+  )
+
+  # Remove non valid UTF-8 characters from all character columns
+  df <- df %>%
+    mutate(across(where(is.character), ~iconv(., from = "UTF-8", to = "UTF-8", sub = "")))
+
+# Add five new columns with value 0
+df <- df %>%
+  mutate(
+    Budget = 0,
+    Entry_level = 0,
+    Business = 0,
+    Luxury = 0,
+    Collector = 0
+  )
+
+# Convert Customer column to string (character)
+df <- df %>%
+  mutate(Customer = as.character(Customer))
+
+
+# Update the new columns based on Customer values
+# Patterns for customer types
+budget_pattern <- c("1", "Mass Market", "Budget")
+entry_level_pattern <- c("2", "Entry Level", "Entry-level", "Student")
+business_pattern <- c("3", "Business", "Professional")
+luxury_pattern <- c("4", "Luxury", "Premium")
+collector_pattern <- c("5", "Collector", "Luxury Collector")
+
+# Update the new columns based on Customer values
+df <- df %>%
+  mutate(
+    Budget = if_else(grepl(paste(budget_pattern, collapse = "|"), Customer, ignore.case=TRUE), 1, Budget),
+    Entry_level = if_else(grepl(paste(entry_level_pattern, collapse = "|"), Customer, ignore.case=TRUE), 1, Entry_level),
+    Business = if_else(grepl(paste(business_pattern, collapse = "|"), Customer, ignore.case=TRUE), 1, Business),
+    Luxury = if_else(grepl(paste(luxury_pattern, collapse = "|"), Customer, ignore.case=TRUE), 1, Luxury),
+    Collector = if_else(grepl(paste(collector_pattern, collapse = "|"), Customer, ignore.case=TRUE), 1, Collector)
+  )
+
+  # Merge duplicate rows where Brand and Company are the same
+  # For binary columns, take the maximum (1 if present in any duplicate)
+  df <- df %>%
+    group_by(Brand, Company) %>%
+    summarise(
+      across(everything(), ~ if(is.numeric(.)) max(., na.rm = TRUE) else first(.)),
+      .groups = "drop"
+    )
+
+# Delete unnecessary columns
+df <- df %>% select(-No, -B2B, -B2C, -Pricing, -Customer)
+
+# View the first few rows of the cleaned data
+head(df)
+```
+
+## Create an Edge List
+```{r create-edge-list}
+# Create edges between Brand and each Customer Type
+
+# Gather the customer type columns into long format to create edges
+df_edges <- df %>%
+  pivot_longer(
+    cols = c(Budget, Entry_level, Business, Luxury, Collector),
+    names_to = "Customer_Type",
+    values_to = "Has_Type"
+  ) %>%
+  filter(Has_Type == 1) %>%
+  select(Brand, Customer_Type)
+
+# Calculate node sizes: Brands by their Market Size
+brand_sizes <- df %>%
+  select(Brand, `Market Size`) %>%
+  distinct() %>%
+  mutate(size = as.numeric(`Market Size`)) %>%
+  mutate(size = ifelse(is.na(size) | !is.finite(size), 5, size)) %>%
+  select(Brand, size)
+
+# For Customer_Type, set to 5 as a constant size
+customer_types <- unique(df_edges$Customer_Type)
+customer_type_sizes <- tibble(name = customer_types, size = 5)
+
+# Set Color for BIC and Sailor Pen Company
+company_colors <- df %>%
+  select(Brand, Company) %>%
+  distinct() %>%
+  mutate(color = case_when(
+    Company == "BIC Corporate" ~ "#fdb813",
+    Company == "Sailor Pen Company" ~ "#0054a4",
+    TRUE ~ "grey"
+  ))
+
+# Assign colors to companies
+filtered_colors <- company_colors %>%
+  select(Brand, color)
+
+# For customer types, set a default color
+customer_type_colors <- tibble(name = customer_types, color = "skyblue")
+
+# Combine into a single data frame for node attributes
+node_sizes <- bind_rows(
+  brand_sizes %>% rename(name = Brand),
+  customer_type_sizes
+)
+
+node_colors <- bind_rows(
+  filtered_colors %>% rename(name = Brand),
+  customer_type_colors
+)
+
+# View the first few rows of the edge list
+head(df_edges)
+```
+
+## Build the Network Graph
+```{r build-graph}
+# Create an undirected graph from the edge list
+g <- graph_from_data_frame(df_edges, directed = FALSE)
+
+# Assign types to nodes (Brand = FALSE, Customer = TRUE)
+V(g)$type <- bipartite_mapping(g)$type
+
+# Assign sizes to nodes based on the node_sizes data frame
+V(g)$size <- ifelse(V(g)$type, 5, node_sizes$size[match(V(g)$name, node_sizes$name)])
+
+# Assign colors to nodes based on the brand_colors mapping
+V(g)$color <- ifelse(V(g)$type, "skyblue", node_colors$color[match(V(g)$name, node_colors$name)]) # Default color for brands 
+```
+
+## Plot the Graph
+```{r plot-graph}
+# Plot the bipartite graph with basic styling
+plot(
+  g,
+  vertex.label.cex = 0.3, # Size of labels
+  vertex.size = V(g)$size, # Smaller for customers
+  vertex.color = V(g)$color, # Color by type
+  layout = layout_with_fr # Force-directed layout
+)
+```
+
+## Community Detection
+```{r community-detection, message=FALSE}
+# Community Detection (using fast greedy algorithm)
+# Only works on connected, undirected graphs
+if (is.connected(g)) {
+  g_simple <- simplify(g, remove.multiple = TRUE, remove.loops = TRUE)
+  comm <- cluster_fast_greedy(g_simple)
+  plot(
+    comm, g_simple,
+    vertex.label.cex = 0.3,
+    vertex.size = V(g_simple)$size,
+    vertex.color = membership(comm),
+    layout = layout_with_fr,
+    main = "Community Detection"
+  )
+} else {
+  cat("Graph is not connected; community detection may not be meaningful.\n")
+}
+```
+
+## Convert to Image
+```{r convert-to-image, echo=FALSE, message=FALSE}
+# Save the plot as an image
+png("pen_brands_network.png", width = 1000, height = 1000, res = 300, pointsize = 6)
+plot(
+  g,
+  vertex.label.cex = .5, # Size of labels
+  vertex.size = V(g)$size*2, # Smaller for customers
+  vertex.color = V(g)$color, # Color by type
+  layout = layout_with_fr # Force-directed layout
+)
+# Save the community detection plot as an image
+dev.off()
+png("pen_brands_community.png", width = 1000, height = 1000, res = 300, pointsize = 6)
+if (is.connected(g)) {
+  g_simple <- simplify(g, remove.multiple = TRUE, remove.loops = TRUE)
+  comm <- cluster_fast_greedy(g_simple)
+  plot(
+    comm, g_simple,
+    vertex.label.cex = 0.5,
+    vertex.size = V(g_simple)$size*2,
+    vertex.color = membership(comm),
+    layout = layout_with_fr,
+    main = "Community Detection"
+  )
+} else {
+  plot.new()
+  text(0.5, 0.5, "Graph is not connected; community detection not shown.")
+}
+dev.off()
+```
+
+## Conclusion
+This simple network highlights how pen brands connect with different customers. You can expand this further by including companies, countries, or product types as nodes or attributes.
+
+## Release all resources
+```{r cleanup, include=FALSE}
+# Clear the environment
+rm(list = ls())
+```

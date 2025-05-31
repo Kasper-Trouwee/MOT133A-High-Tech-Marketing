@@ -1,0 +1,8 @@
+.httr-oauth
+.env
+
+# Folders for storing data
+reddit/*
+!reddit/.gitkeep
+youtube/*
+!youtube/.gitkeep
