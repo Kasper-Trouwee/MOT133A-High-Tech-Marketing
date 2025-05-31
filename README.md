@@ -1,5 +1,7 @@
 # MOT133A High Tech Marketing
-All of the code for this course used by group 2 can be found here.
+
+This repository contains all code and resources used by Group 2 for the MOT133A High Tech Marketing course.
 
 ## Setup
-for each folder please see specefic information on how to set it up.
+
+For setup instructions, please refer to the README or documentation within each folder for specific details.
